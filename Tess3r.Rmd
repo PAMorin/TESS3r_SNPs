@@ -267,11 +267,6 @@ TESS.2.order[1:10, 1:10]
 write.table(TESS.2.order,file = paste0(title,stratum,"_TESS.2_genotable.csv"), quote = FALSE,row.names = FALSE, col.names = TRUE, sep=",")
 ```
 
-## Reformat Lat/Lon coordinates (not done yet)
-The coordinates must be projected so that the distance Network in TESS/GELENAD between samples is in km, not in arc-degree. 2. Add dummy points to the dataset to avoid landmass cross, and adjust automatically the network. 3. Make a ASCII-RASTER map so that the interpolation can be done only for seascape, not the landscape. These steps are required to run properly TESS (and Geneland as well).
-
-
-
 ## run Tess3 (Estimate ancestry coefficients and run genome scans for selection)
 ```{r results='hide', message=FALSE, error=FALSE, cache=TRUE}
 # convert Tess2 to Tess3 format
