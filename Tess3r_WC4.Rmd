@@ -1,0 +1,391 @@
+---
+title: "Tess3R_Gtypes"
+output:
+  word_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Rmarkdown reference guide: https://www.rstudio.com/wp-content/uploads/2015/03/rmarkdown-reference.pdf
+# Rmarkdown: the definitive guide: https://bookdown.org/yihui/rmarkdown/html-document.html
+
+```
+
+# Tess3r analysis scripts
+
+Tess3r install with vignettes. 
+# install.packages("devtools")
+# devtools::install_github("bcm-uga/TESS3_encho_sen")
+(in Windows, there was an issue of Rtools not being compatible with R3.5 even after I downloaded the latest version (3.5); This fixed it:
+library(devtools)
+assignInNamespace("version_info", c(devtools:::version_info, list("3.5" = list(version_min = "3.3.0", version_max = "99.99.99", path = "bin"))), "devtools")
+find_rtools() # shouls return "TRUE")
+(from https://github.com/r-lib/devtools/issues/1772)
+
+Not on CRAN:
+devtools::install_github('ericarcher/stratag')
+devtools::install_github('ericarcher/swfscMisc')
+devtools::install_github("thierrygosselin/radiator")
+devtools::install_github("bcm-uga/LEA")
+
+## load libraries
+```{r echo=TRUE, results='hide', message=FALSE, warning=FALSE} 
+rm(list = ls())
+# install.packages("devtools")
+#devtools::install_github("bcm-uga/TESS3_encho_sen")
+library(tidyverse)
+library(tess3r)
+library(maps)
+library(ggplot2)
+library(rworldmap)
+library(strataG)
+library(swfscMisc)
+library(radiator)
+library(fields)
+library(RColorBrewer)
+library(mapplots)
+library(LEA)
+library(marmap)
+library(raster)
+paste("working directory is:")
+getwd()
+```
+
+## load genotype data and stratification schemes
+### stratify the data and remove loci that are monomorphic in the strata.
+```{r}
+stratum <- "Wcoast4_num"
+title <- "Tess3r"
+#dir.create(paste(title,"_",stratum, sep = ""))
+
+# read genotypes data file (diploid, codominant); in directory above current directory
+# Format = 1st column = labid, 2 columns per locus
+gdata <- read.csv("../SNP151-microhaplo_QA_292_loci_split_final_genotable.csv", header = TRUE) 
+#sample id column = 'labid', missing data as NA, 00, 000, -999
+
+# read stratification file (includes lat/lon coordinates)
+# in directory above current directory
+# required columns for labid, Latitude, Longitude. After that, each column is a stratification scheme with 
+#  strata names for each sample in the strata.
+coord <- read.csv("../Q_Ppho_samples_strata_270618.csv", header = TRUE, na.strings=c("","NA"))
+# change labid column header name
+colnames(coord)[colnames(coord) == "LABID"] <- "labid"
+
+# combine data with coordinates (files can be different lengths)
+# select the specified stratum along with labid, Latitude and Longitude from the strata file
+strata.df.names <- c("labid", "Latitude", "Longitude", stratum)
+coord.strat <- coord[,colnames(coord) %in% strata.df.names]
+# then merge dataframes based on "labid" being a column name in both dataframes
+data <- merge(coord.strat,gdata)
+# remove sample data if not included in the specified strata
+data2 <- data %>% drop_na(stratum)
+# remove sample data if it doesn't have lat/lon
+data2 <- data2 %>% drop_na(Latitude)
+# Remove monomorphic loci then ane write a file of monomorphic loci for this stratification scheme.
+other<-data2 %>% dplyr::select(labid, Latitude, Longitude) #create dataframe to add Lat/Lon to gtypes object
+g <- df2gtypes(data2, #this creates a df with 2 columns for id and hap
+               ploidy = 2,
+               id.col = 1,
+               strata.col = 4,
+               loc.col = 5,
+               other = other,
+               description = title)
+alleleNum<-numAlleles(g)
+not.mono <- names(alleleNum)[alleleNum > 1]
+not.mono.g <- g[, not.mono, ]
+not.mono.df <- as.data.frame(not.mono.g)
+not.mono.df$labid<-not.mono.df$ids
+not.mono.df$ids<-NULL
+# Add the lat/lon data back to the dataframe
+data3<-merge(not.mono.df,other)
+# re-order the dataframe to put Lat/Lon columns after labid's
+latlon <- c("labid", "Latitude", "Longitude")
+data3 <- data3[, c(latlon, setdiff(names(data3), latlon))]
+data3 <- data3 %>% arrange(desc(strata), labid) # sort by species column (decreasing) so that hybrids show up on map
+
+# save list of monomorphic loci to a .csv file
+mono<-alleleNum < 2
+monoloc<-names(mono) [which(mono==TRUE)]
+write.csv(monoloc, paste0(stratum,"_monomorphic_loci.csv"))
+cat("there were", length(monoloc), "monomorphic loci, saved to file:", paste0(stratum,"_monomorphic_loci.csv"))
+
+#save summary of data (after excluding monomorphic loci)
+data_sum <- summary(not.mono.g)
+strata.df <- as.data.frame(data_sum$strata.smry)
+loc.df <- as.data.frame(data_sum$locus.smry)
+samp.df <- as.data.frame(data_sum$sample.smry)
+write.csv(strata.df, paste0(title,"_",stratum,"_data_sum.csv"))
+write.csv(loc.df, paste0(title,"_",stratum,"_loc_sum.csv"))
+write.csv(samp.df, paste0(title,"_",stratum,"_sample_sum.csv"))
+
+paste("number of individuals = ", data_sum$num.ind)
+paste("number of loci = ", data_sum$num.loc)
+
+# set the modified data file as the default database in R search path
+attach(data3) 
+
+data3[1:10,1:10]
+```
+
+#Map the data points
+```{r echo=FALSE, fig.height=8, fig.width=8}
+sample2.map<-function (lat, lon, lat.range, lon.range, main = NULL, 
+                       pch = 19, pt.cex = 1, col = "black", bg = col, 
+                       n = 5, lon.n = n, lat.n = n) 
+{
+  has.loc <- !is.na(lon) & !is.na(lat)
+  in.lon.range <- lon >= min(lon.range) & lon <= max(lon.range)
+  in.lat.range <- lat >= min(lat.range) & lat <= max(lat.range)
+  to.plot <- has.loc & in.lon.range & in.lat.range
+  if (!is.null(main)) 
+    main <- paste(main, " (n = ", sum(to.plot), ")", sep = "")
+  if (length(pch) == length(lon)) 
+    pch <- pch[to.plot]
+  if (length(pt.cex) == length(lon)) 
+    pt.cex <- pt.cex[to.plot]
+  if (length(col) == length(lon)) 
+    col <- col[to.plot]
+  op <- par(mar = c(3, 5, ifelse(is.null(main), 3, 5), 5) + 
+              0.1, oma = c(1, 1, 1, 1))
+  map("world2Hires", xlim = lon.range, 
+      ylim = lat.range)
+  points(lon[to.plot], lat[to.plot], pch = pch, cex = pt.cex, 
+         col = col, bg = bg)
+  #lat.lon.axes(lon.range, lat.range, n = n, lon.n = lon.n, 
+  #             lat.n = lat.n)
+  if (!is.null(main)) 
+    mtext(main, line = 3, cex = 1.5)
+  box(lwd = 2)
+  #invisible(op)
+}
+
+#pop_number <- #list of numbers, 1 to the total number of populations in the strata
+  # build a color list for the number of populations in this stratification scheme
+
+# add a column for 360° mapping
+Lon360 <- ifelse(data3$Longitude < 0, 360 + data3$Longitude, data3$Longitude)
+data3_Lon360 <- cbind(data3, Lon360)
+lat_min <- min(data3_Lon360$Latitude)
+lat_max <- max(data3_Lon360$Latitude)
+lon_min <- min(data3_Lon360$Lon360)
+lon_max <- max(data3_Lon360$Lon360)
+    
+lat.range <- c(lat_min - 2, lat_max + 2)
+lon.range <- c(lon_min - 2, lon_max + 2)
+n<-5
+
+# NOT USED: could develop to select colors based on number of strata and apply to the map.
+#type.col <- "red" 
+#type.pch <- 21
+#create named vectors where the names match the values in the "type" column of 
+#the input data file, and each type is assigned a color and shape.
+#sample2.map(data3_Lon360$Latitude, data3_Lon360$Lon360, lat.range, lon.range, n = n, 
+#           bg = type.col[data3_Lon360$strata], pch = type.pch[data3_Lon360$strata])
+
+sample2.map(data3_Lon360$Latitude, data3_Lon360$Lon360, lat.range, lon.range, n = n, 
+           bg = "black", col = "blue")
+
+```
+
+## convert gtypes object to structure-formatted file
+```{r}
+# first convert gtypes to genind
+genot <- data3[5:ncol(data3)]
+dim(genot)
+loc<-ncol(genot) # counts the number of columns (alleles)
+
+allele <- sapply(genot, levels)
+
+#List of Alleles 1
+Ai <- seq(1,loc-1,2); length(Ai)
+#List of Alleles 2
+Aj <- seq(2,loc,2); length(Aj)
+
+# Nb loci
+nloc <- length(Ai)
+
+# Empty matrix
+SNPdata <- matrix(ncol=length(genot)/2, nrow=nrow(genot))
+
+# Loop to assamble A1 and A2 of each loci into combined alleles in single column
+for (i in c(1:nloc)){
+  #i=1
+  SNP <- paste(genot[,Ai[i]], genot[,Aj[i]], sep="/")
+  SNPdata[,i] <- SNP
+}
+
+# Note SNPdata have lost the loc.names. We can restore that as follow
+my.colnames <- names(genot)[Ai]
+my.new.colnames <- gsub(".1$","", names(genot)[Ai], perl=TRUE)
+colnames(SNPdata) <- my.new.colnames #gsub(".1$","", names(genot)[Ai], perl=TRUE)
+rownames(SNPdata) <- data3$labid
+SNPdata1 <- cbind(labid = rownames(SNPdata), SNPdata)
+SNPdata[c(1:10), (1:10)]
+
+genind<-df2genind(X=SNPdata, ind.names=data3$labid, pop=data3$strata, ploidy=2, sep="/", NA.char = "NA/NA")
+genind.summary <- summary(genind)
+genind$other$xy <-cbind(data3$Longitude,data3$Latitude)
+genind
+```
+
+
+## Convert genind object to Tess2-formated input file (converts alleles to numbers)
+```{r}
+# str(genind@all.names)  # Compactly Display the Structure of an Arbitrary R Object
+genind.recode <- genind
+# for each locus, convert alleles to allele numbers
+for(i in 1:length(genind.recode$all.names)){
+  genind.recode@all.names[[i]]
+  n.allele <- length(genind.recode@all.names[[i]]); n.allele
+  genind.recode@all.names[[i]] <- as.character(seq(1:n.allele))
+}
+# str(genind.recode@all.names) # to visualize the alleles converted to numbers
+
+# convert to TESS format
+TESS.1 <- genind2df(x = genind.recode, sep = " ", oneColPerAll = TRUE, usepop = FALSE)
+TESS.1[TESS.1 == "NA"] <- "-9"
+TESS.1[1:10, 1:10]
+
+# add the population and lat/lon data
+TESS.2 <- cbind(rownames(genind.recode@tab), genind.recode@pop, genind.recode@other$xy, TESS.1)
+colnames(TESS.2)[c(1:4)] <- c("LABID", "Population", "X", "Y")
+
+TESS.2[1:10, 1:10]
+```
+
+## Order data rows by latitude and output Tess2 formatted genotype table.
+```{r}
+TESS.2.order <- TESS.2[order(TESS.2$Y),]
+dim(TESS.2.order)
+TESS.2.order[1:10, 1:10]
+write.table(TESS.2.order,file = paste0(title,stratum,"_TESS.2_genotable.csv"), quote = FALSE,row.names = FALSE, col.names = TRUE, sep=",")
+```
+
+## Reformat Lat/Lon coordinates (not done yet)
+The coordinates must be projected so that the distance Network in TESS/GELENAD between samples is in km, not in arc-degree. 2. Add dummy points to the dataset to avoid landmass cross, and adjust automatically the network. 3. Make a ASCII-RASTER map so that the interpolation can be done only for seascape, not the landscape. These steps are required to run properly TESS (and Geneland as well).
+
+
+
+## run Tess3 (Estimate ancestry coefficients and run genome scans for selection)
+```{r results='hide', message=FALSE, error=FALSE, cache=TRUE}
+# convert Tess2 to Tess3 format
+obj <- tess2tess3(dataframe = TESS.2, TESS = TRUE, diploid = TRUE, FORMAT = 1,  extra.row = 0, extra.column = 2) # Format equal to 1 for markers encoded using one row of data for each individual, and 2 for markers encoded using two rows of data for each individual.
+
+# Run Tess3
+k <- 8
+tess.res <- tess3(X = obj$X, coord = obj$coord, K = 1:k, ploidy = 2, openMP.core.num = 2, rep = 20, max.iteration = 200, keep = "best", mask = 0, verbose = F)
+# rep = The number of times the algorithm will be repeated for each value of K ############(recommended = 10)
+# max.iteration	= the maximum number of iterations of the optimization algorithm. ##########(recommend = 200 (default))
+# keep = if "best", only the result with the lowest rmse score will be kept for each value of K. If "all", all results will be kept and returned for each value of K. The second option uses more space in memory.
+# mask =  this numeric value is the proportion of masked data when computing the cross-validation criterion (default = 0).
+
+# From Olivier Francçois: For the tess parameters, rep is the number of repetitions. Tess3r is a local optimizer, so increasing rep increases the chance of getting a better local optimum for ancestry coefficients, just like STRUCTURE or other programs. Usually 10 reps are ok, but the program is fast and you could explore more repetitions.  For max.iteration and mask, just use the default values. 
+
+###########(recommendation = ???)
+```
+
+## generated Tess ouput.
+
+### How many clusters is optimal?
+```{r}
+#The plot function generates a plot for root mean-squared errors computed on a subset of loci used for cross-validation.
+plot(tess.res, pch = 19, col = "blue",
+     xlab = "Number of ancestral populations",
+     ylab = "Cross-validation score")
+
+# specify crossvalidation with error bars (only works if tess3r option 'mask' between 0 and 1 (proportion to mask for repeats))
+#plot(tess.res, crossvalid = TRUE, crossentropy = FALSE, pch = 19, col = "blue",
+#     xlab = "Number of ancestral populations",
+#     ylab = "Cross-validation score")
+
+# specify crossentropy with error bars (appears to be very similar to "plot" above)
+#plot(tess.res, crossvalid = FALSE, crossentropy = TRUE, pch = 19, col = "blue",
+#     xlab = "Number of ancestral populations",
+#     ylab = "Cross-entropy score")
+# Plot cross-validation errors for all values of number of ancestral populations. 
+
+# The interpretation of this plot is similar to the cross-entropy plot of LEA or the cross-validation plot of ADMIXTURE. The cross-validation criterion is based on the prediction of a fraction of masked genotypes via matrix completion, and comparison with masked values considered as the truth. Smaller values of the cross-validation criterion mean better runs. The best choice for the K value is when the cross-validation curve exhibits a plateau or starts increasing.
+
+#Warning: Be cautious about over-interpreting the value of K and the folkore around the choice of this value. Population structure is often hierarchical, and the estimation of K strongly depends on sampling and genotyping efforts. The number of genetic groups detected by ancestry estimation programs does not necessarily correspond to the number of biologically meaningful populations in the sample (Francois and Durand 2010).
+```
+
+### Visualize admixture proportions as barplot for various K's
+```{r fig.height=8, fig.width=20, cache=TRUE}
+my.colors <- c('indianred1','mediumpurple1','yellow1','darkolivegreen1',
+                'deepskyblue2','orange','pink2', 'olivedrab') # only up to k=8; add more if needed.
+#my.colors <- c("tomato", "orange", "lightblue", "wheat","olivedrab") # Michael Fontain's colors
+#my.colors <- c('red','purple', 'yellow','green','blue','orange','pink') # bright colors
+my.palette <- CreatePalette(my.colors, 4)
+
+#pdf(file=paste(title, "_",stratum, "_", ".Tess_qmatrix_plots.pdf",
+#                sep = ""), width = 10, height = 3, paper = "USr")
+for(i in 2:k) {
+Q.matrix <- qmatrix(tess.res, K = i)
+barplot(Q.matrix, sort.by.Q = FALSE, 
+        border = NA, space = 0,
+        col.palette = my.palette,
+        xlab = "Individuals", ylab = "Ancestry coefficients") -> bp
+axis(1, at = 1:nrow(Q.matrix), labels = bp$order, las = 3, cex.axis = .3)
+}
+#dev.off()
+
+```
+
+### map spatial interpolation of ancestry coefficient
+```{r fig.width=8, fig.height=6, cache=TRUE}
+## get the NOAA map (change lon and lat coordinates and resolution, see help)
+# use antimeridian = TRUE to center on antimeridian (Pacific Ocean)
+map.bathy <- marmap::getNOAA.bathy(lon1=160, lon2= -110, lat1= 30, lat2= 74, res = 10, keep=TRUE, antimeridian = TRUE)
+
+# change sign (I think this inverts land/water color surface)
+map.bathy1 <-  - map.bathy
+
+# convert bathy to raster (package = raster)
+asc.raster <- marmap::as.raster(map.bathy1)
+
+#rewrite the modified raster in your working directory
+raster::writeRaster(asc.raster, "myraster.asc", overwrite=TRUE)
+
+#convert the longitude data to 360°.
+coord_map <- as.data.frame(obj$coord)
+lon360 <- ifelse(coord_map$X < 0, 360 + coord_map$X, coord_map$X)
+coord_360 <- cbind(coord_map, lon360)
+coord_360$X <- NULL
+coord_360r <- coord_360[,c("lon360", "Y")]
+
+# run tess3r, get the Q.matrix, and the geographic coordinates and plot them with the raster.filename option
+#pdf(file=paste(title, "_",stratum, "_", ".Tess_maps.pdf",
+#                sep = ""), width = 3.5, height = 6, paper = "USr")
+
+for(i in 2:k) {
+q.matrix <- qmatrix(tess.res, K = i)
+Npac<-plot(q.matrix, coord_360r, method = "map.max", cex = .5, raster.filename = "myraster.asc", interpol = FieldsKrigModel(10), main = paste0("Ancestry coefficients, k=",i), resolution = c(300, 300), col.palette = my.palette, xlab = "Longitude", ylab = "Latitude")
+}
+#dev.off()
+```
+
+
+### Genome scan p-values for specified K (from Tess3 function examples)
+```{r, cache=TRUE}
+p.values <- pvalue(tess.res, K = 2)
+hist(p.values, col = "lightblue")
+```
+
+### Manhatan plot
+```{r, cache=TRUE}
+plot(p.values, main = "Manhattan plot",
+    xlab = "Locus id",
+    ylab = "-log10(P-values)",
+    cex = .3, col = "grey40")
+```
+
+```{r}
+# save all data
+save.image(file=paste0(title, "_", stratum,"_tess_results.rdata"))
+```
