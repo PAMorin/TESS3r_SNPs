@@ -107,7 +107,7 @@ data3<-merge(not.mono.df,other)
 # re-order the dataframe to put Lat/Lon columns after labid's
 latlon <- c("labid", "Latitude", "Longitude")
 data3 <- data3[, c(latlon, setdiff(names(data3), latlon))]
-data3 <- data3 %>% arrange(desc(strata), labid) # sort by species column (decreasing) so that hybrids show up on map
+data3 <- data3 %>% arrange(strata, labid) # sort by species column (increasing); for decreasing, change to "arrange(desc(strata), labid)"
 
 # save list of monomorphic loci to a .csv file
 mono<-alleleNum < 2
