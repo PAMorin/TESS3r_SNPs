@@ -327,6 +327,10 @@ barplot(Q.matrix, sort.by.Q = FALSE,
         col.palette = my.palette,
         xlab = "Individuals", ylab = "Ancestry coefficients") -> bp
 axis(1, at = 1:nrow(Q.matrix), labels = bp$order, las = 3, cex.axis = .3)
+
+Q.matrix.df <- as.data.frame(Q.matrix)
+Qmat <- cbind(TESS.2$LABID, TESS.2$Population, Q.matrix.df)
+write.csv(Qmat, paste0(title, "_", stratum, "_K",i,"_Qmatrix.csv"))
 }
 #dev.off()
 
