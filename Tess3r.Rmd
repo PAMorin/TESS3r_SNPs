@@ -372,16 +372,45 @@ Npac<-plot(q.matrix, coord_360r, method = "map.max", cex = .5, raster.filename =
 
 ### Genome scan p-values for specified K (from Tess3 function examples)
 ```{r, cache=TRUE}
-p.values <- pvalue(tess.res, K = 2)
+for(i in 2:k) {
+p.values <- pvalue(tess.res, K = i)
 hist(p.values, col = "lightblue")
+}
 ```
 
-### Manhatan plot
+### Manhattan plot
 ```{r, cache=TRUE}
-plot(p.values, main = "Manhattan plot",
+# Benjamini-Hochberg algorithm
+for(i in 2:k) {
+p.values <- pvalue(tess.res, K = i)
+L = length(p.values)
+fdr.level = 0.2 #1e-4
+w = which(sort(p.values) < fdr.level * (1:L)/L)
+candidates = order(p.values)[w]
+length(candidates)
+#write.csv(candidates, paste0(title, "_", stratum, "k_",i,"_candidates.csv"))
+
+plot(p.values, main = paste0("Manhattan plot, k = ",i, ", FDR = ",fdr.level),
     xlab = "Locus id",
     ylab = "-log10(P-values)",
-    cex = .3, col = "grey40")
+    cex = .3, col = "grey0")
+points(candidates, -log10(p.values)[candidates], 
+       pch = 19, cex = .5, col = "blue")
+
+# Write list of candidate alleles from genome scan (log p-value above the false discovery rate (fdr))
+Genind_alleles <- colnames(genind@tab)
+allele_pvalues <- cbind(Genind_alleles, p.values)
+# add column name "pval" to the p.values, and change "genind_alleles" to "alleles"
+allele_pvalues<-tibble::rownames_to_column(as.tibble(allele_pvalues))
+colnames(allele_pvalues) <-c("alleleNum", "allele", "pval")
+allele_pvalues <- as.data.frame(allele_pvalues)
+
+# subset by locus numbers (first column) from candidate loci list.
+allele_pvalues_sub <- allele_pvalues[allele_pvalues$alleleNum %in% candidates,]
+allele_pvalues_sub <- allele_pvalues_sub[order(allele_pvalues_sub$pval),]
+
+write.csv(allele_pvalues_sub, paste0(title, "_",stratum,"_k",i,"candidate_pvalues.csv"))
+}
 ```
 
 ```{r}
